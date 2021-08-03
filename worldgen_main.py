@@ -261,7 +261,7 @@ route_zones = []
 
 class RouteNode:
     # blatantly stolen and adapted from https://medium.com/@nicholas.w.swift/easy-a-star-pathfinding-7e6689c7f7b2
-    # because I'm too lazy to rewrite the wheel
+    # because I'm too lazy to rewrite the wheel. Don't use their code out of the box - original has many bugs
     def __init__(self, parent=None, position=None, already_created=False):
         self.parent = parent
         self.position = position
@@ -349,22 +349,20 @@ class RouteNode:
                 found_open = False
                 previous_node_index = -1
                 for open_node_index in range(len(open_list)):
-                    if child == open_list[open_node_index] and child.g > open_list[open_node_index].g:
+                    if child == open_list[open_node_index]:
+                        if child.g > open_list[open_node_index].g:
+                            open_list[previous_node_index] = child
+                            previous_node_index = open_node_index
                         found_open = True
-                        previous_node_index = open_node_index
                         break
                 if found_open:
                     continue
                 if previous_node_index == -1:
-                    # print("new node")
                     open_list.append(child)
-                else:
-                    print("replacing dupe")
-                    open_list[previous_node_index] = child
+
 
 
 route_number = 0
-
 print_map(towns)
 
 
