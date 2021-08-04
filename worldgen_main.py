@@ -27,7 +27,7 @@ def print_map(towns: {}):
         for xcoord in range(world_size[0]):
             # min_poi = -1
             # min_distance = float("inf")
-            text_to_print = "_"
+            text_to_print = " "
             # for j in range(len(pois)):
             #     if pois[j]["coordinates"] == (xcoord, ycoord):
             #         min_poi = j
@@ -43,8 +43,8 @@ def print_map(towns: {}):
                     break
             bcolor_index = int((xcoord/subsample_region_width)) + int((ycoord/subsample_region_len))
             color = bcolors[bcolor_index]
-            line_to_print += f"{color}|{text_to_print}"
-        print(line_to_print + "|")
+            line_to_print += f"{color} {text_to_print}"
+        print(line_to_print + " ")
 
 
 # on our world grid, place our points of interest.
@@ -66,8 +66,12 @@ def print_map(towns: {}):
 towns = []
 # print(subsample_region_len, subsample_region_width)
 random_sit_out = (random.choice(range(subregion_len)), random.choice(range(subregion_width)))
+random_home_is1 = random.choice(range(2))
 home_subsample_region = (random.choice([x for x in range(subregion_len) if (x != random_sit_out[0])]),
                          random.choice([x for x in range(subregion_width) if (x != random_sit_out[1])]))
+# experimental: forcing one of the axes to 1 to make more interesting paths
+home_subsample_region = (1 if random_home_is1 == 0 else home_subsample_region[0],
+                         1 if random_home_is1 == 1 else home_subsample_region[1])
 # print(random_sit_out)
 print(home_subsample_region, "home")
 for i in range(subregion_len):
@@ -85,7 +89,8 @@ for i in range(subregion_len):
             "has_gym": True,
             "map_character": "G",
             "subregion": (i, j),
-            "gym_number": -1
+            "gym_number": -1,
+            "type": "gym"
         }
         towns.append(new_gym)
 
@@ -95,10 +100,10 @@ for i in range(subregion_len):
 
         excluded_area_x = range(new_gym["coordinates"][0] - padding, new_gym["coordinates"][0] + padding + 1)
         excluded_area_y = range(new_gym["coordinates"][1] - padding, new_gym["coordinates"][1] + padding + 1)
-        home_generator_xcoord = [x for x in range(padding + subsample_region_width * i,
+        home_generator_xcoord = [x for x in range(padding*2 + subsample_region_width * i,
                                                   subsample_region_width * (i+1) - padding)
                                  if (x not in excluded_area_x)]
-        home_generator_ycoord = [y for y in range(padding + subsample_region_len * j,
+        home_generator_ycoord = [y for y in range(padding*2 + subsample_region_len * j,
                                                   subsample_region_len * (j + 1) - padding)
                                  if (y not in excluded_area_y)]
         print(excluded_area_x, excluded_area_y)
@@ -107,21 +112,11 @@ for i in range(subregion_len):
                             random.choice(home_generator_ycoord)),
             "has_gym": False,
             "map_character": 'H',
-            "subregion": (i, j)
+            "subregion": (i, j),
+            "type": "hometown"
         }
         print(hometown)
         towns.append(hometown)
-
-# next todo:
-# write a path creation function
-# it should: prefer already created routes
-# choose from a group of types for tiebreaks, for that one set of routes
-# avoid 2x squares, no filling in "corners" - check diagonally for routes before placing one.
-#   * if you see one, move onto it, we can guarantee it moves in the direction we care about for at least one tile
-
-# now that we have a full set of gyms with locations, and a starting town, we can generate our routes.
-# start by mapping all gyms and the home town to a dictionary that holds based on coordinates, for easy access while
-# traversing the map graph
 
 # test code for cube validation
 # towns.append({
@@ -139,6 +134,8 @@ for i in range(subregion_len):
 valid_map_coordinates = set()
 for town in towns:
     valid_map_coordinates.add(town["coordinates"])
+# copy the valid map coordinates to valid city coordinates at this point. They will differ in the future, but not yet
+valid_city_coordinates = valid_map_coordinates.copy()
 
 
 # Some helper functions for world traversal
@@ -257,6 +254,7 @@ def find_gym(number) -> (int, int):
 
 # store our routes for later steps (town generation pt 2)
 route_zones = []
+routes = {}
 
 
 class RouteNode:
@@ -278,7 +276,7 @@ class RouteNode:
         return self.f < other.f
 
     @staticmethod
-    def astar(start, end):
+    def astar(start: (int, int), end: []):
 
         # Create start and end node
         start_node = RouteNode(None, start)
@@ -361,21 +359,22 @@ class RouteNode:
                     open_list.append(child)
 
 
-
 route_number = 0
-print_map(towns)
 
 
 def add_route(route: []):
     global route_number
     route_number += 1
-    for zone in route:
+    new_nodes = [zone for zone in route if zone not in valid_map_coordinates]
+    routes[route_number] = new_nodes
+    for zone in new_nodes:
         valid_map_coordinates.add(zone)
     for route_zone in route:
         route_zones.append({
             "coordinates": route_zone,
             "route_number": route_number,
-            "map_character": string.ascii_lowercase[route_number-1]
+            "map_character": string.ascii_lowercase[route_number-1],
+            "type": "route"
         })
 
 
@@ -384,12 +383,95 @@ for i in range(1, 8):
     print("generating route ", i, i+1)
     add_route(RouteNode.astar(find_gym(i), find_gym(i+1)))
 
-print(len(route_zones))
-print_map(towns + route_zones)
+
+def expand_city(city_to_expand: {}, expansion_count: int):
+    # get our neighbors, check if they're routes. If they are, we can add those as part of the city
+    # attempt to expand along routes first, and if we can't, expand to other sides
+    if expansion_count == 0:
+        return city_to_expand
+
+    neighbors = get_neighbors(city_to_expand["coordinates"])
+    new_coords = set()
+    sorted_neighbors = [key for key in neighbors.keys()]
+
+    while len(sorted_neighbors):
+        # sort here - this is to promote a certain shape of city. preferably, we want one of the following:
+        # |x|_|    |x|_|    |x|x|    |x|_|
+        # |x|_| or |x|x| or |x|x| or |_|_|, in any orientation. Long cities are bad.
+        # sort by sum of distance, then by if a route already exists there, and then finally if it passes the
+        # route corner check
+        sorted_neighbors.sort(key=lambda sn: (sum([abs(sn[0] - nc[0]) + abs((sn[1] - nc[1])) for nc in new_coords]),
+                                              not neighbors[sn]["already_exists"],
+                                              not neighbors[sn]["valid"]), reverse=False)
+        coordinate = sorted_neighbors.pop(0)
+        if coordinate in valid_city_coordinates:
+            continue  # no expanding into already existing cities
+
+        coordinate_neighbors = get_neighbors(coordinate)
+        # also check the neighbors (that aren't the city center) to see if they're cities - no expanding
+        # over 1-long routes
+        need_to_skip = False
+        for coord_neighbor in coordinate_neighbors.keys():
+            if coord_neighbor in valid_city_coordinates and coord_neighbor != city_to_expand["coordinates"]:
+                need_to_skip = True
+                break
+        if need_to_skip:
+            continue
+
+        new_coords.add(coordinate)
+
+        # remove all the new coordinates from the route, they aren't a route anymore
+        if expansion_count == len(new_coords):
+            break
+        direction_vector = (coordinate[0] - city_to_expand["coordinates"][0],
+                            coordinate[1] - city_to_expand["coordinates"][1])
+        across_from_city = coordinate[0] + direction_vector[0], coordinate[1] + direction_vector[1]
+
+        for coord_neighbor in coordinate_neighbors.keys():
+            # skip the city itself and the one opposite of the coordinate we're already adding
+            if coord_neighbor == city_to_expand["coordinates"] or coord_neighbor == across_from_city:
+                continue
+
+            new_coords.add(coord_neighbor)
+            break
+
+        if expansion_count == len(new_coords):
+            break
+
+    city_to_expand["sub_coordinates"] = new_coords
+
+    # clean up route_zones - these coordinates are part of the city now
+    items_to_remove = []
+    for rz_index in range(len(route_zones)):
+        if route_zones[rz_index]["coordinates"] in new_coords:
+            items_to_remove.append(route_zones[rz_index])
+    for item in items_to_remove:
+        route_zones.remove(item)
+
+    for new_coord in new_coords:
+        for route_index in routes.keys():
+            if new_coord in routes[route_index]:
+                routes[route_index].remove(new_coord)
+
+    [valid_city_coordinates.add(new_coord) for new_coord in new_coords]
+    [valid_map_coordinates.add(new_coord) for new_coord in new_coords]
+    return city_to_expand
 
 
+sub_towns = []
+for town_index in range(len(towns)):
+    if towns[town_index]["type"] == "gym":
+        towns[town_index] = expand_city(towns[town_index], random.choice(range(4)))
+        if "sub_coordinates" in towns[town_index]:
+            print("town", towns[town_index]["map_character"], "expanded by", len(towns[town_index]["sub_coordinates"]))
+            for sub_coord in towns[town_index]["sub_coordinates"]:
+                sub_towns.append({
+                    "coordinates": sub_coord,
+                    "map_character": string.ascii_uppercase[towns[town_index]["gym_number"]-1],
+                    "type": "sub_coordinate"
+                })
 
+print_map(towns + route_zones + sub_towns)
 
-
-
+print(home_subsample_region)
 
